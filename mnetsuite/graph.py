@@ -27,6 +27,9 @@
 import sys
 import getopt
 import pydot
+from graphml import GraphML, Graph, Node, Folder, Edge, Options, Data_id
+import xml.dom.minidom
+
 import datetime
 import os
 import binascii
@@ -43,6 +46,7 @@ class mnet_graph_dot_node:
 	shape = None
 	style = None
 	peripheries = 0
+        name  = None
 	label = None
 
 	def __init__(self):
@@ -77,17 +81,19 @@ class mnet_graph:
 			n.crawled = 0
 
 
-	def crawl(self, ip):
+	def crawl(self, root):
 		# pull info for this node
-		node = self._get_node(ip, 0, 'root')
-		if (node != None):
+                for ip in root:
+		    node = self._get_node(ip, 0, 'root')
+		    if (node != None):
 			self._crawl_node(node, 0)
-		
-		self.root_node = node
+
+                    if self.root_node == None:
+		        self.root_node = node
 
 		# we may have missed chassis info
 		for n in self.nodes:
-			if ((n.serial == None) | (n.plat == None) | (n.ios == None)):
+			if ((n.serial == None) or (n.plat == None) or (n.ios == None)):
 				n.opts.get_chassis_info = True
 				n.query_node()
 
@@ -122,7 +128,7 @@ class mnet_graph:
 		# return a minimal node since we don't have
 		# a real IP.
 		# LLDP can return an empty string for IPs.
-		if ((ip == '0.0.0.0') | (ip == '')):
+		if ((ip == '0.0.0.0') or (ip == '')):
 			self.nodes.append(node)
 			return node
 
@@ -181,7 +187,7 @@ class mnet_graph:
 		if (node == None):
 			return
 
-		if (depth >= self.max_depth):
+		if (self.max_depth > 0 and depth >= self.max_depth):
 			return
 					
 		if (node.crawled > 0):
@@ -213,7 +219,7 @@ class mnet_graph:
 		# get list of LLDP neighbors
 		lldp_neighbors = node.get_lldp_neighbors()
 
-		if ((cdp_neighbors == None) & (lldp_neighbors == None)):
+		if ((cdp_neighbors == None) and (lldp_neighbors == None)):
 			return
 
 		neighbors = cdp_neighbors + lldp_neighbors
@@ -250,7 +256,7 @@ class mnet_graph:
 	# Returns 1 if the IP is allowed to be crawled.
 	#
 	def is_node_allowed(self, ip):
-		if ((ip == 'UNKNOWN') | (ip == '')):
+		if ((ip == 'UNKNOWN') or (ip == '')):
 			return 1
 
 		ipaddr = None
@@ -267,7 +273,7 @@ class mnet_graph:
 					return 0
 		
 		# check allowed subnets
-		if ((self.config.allowed_subnets == None) | (len(self.config.allowed_subnets) == 0)):
+		if ((self.config.allowed_subnets == None) or (len(self.config.allowed_subnets) == 0)):
 			return 1
 
 		for s in self.config.allowed_subnets:
@@ -297,26 +303,26 @@ class mnet_graph:
 				if (n.name == link.node.name):
 					# find the existing link
 					for ex_link in n.links:
-						if ((ex_link.node.name == node.name) & (ex_link.local_port == link.remote_port)):
-							if ((link.local_if_ip != 'UNKNOWN') & (ex_link.remote_if_ip == None)):
+						if ((ex_link.node.name == node.name) and (ex_link.local_port == link.remote_port)):
+							if ((link.local_if_ip != 'UNKNOWN') and (ex_link.remote_if_ip == None)):
 								ex_link.remote_if_ip = link.local_if_ip
 
-							if ((link.local_lag != 'UNKNOWN') & (ex_link.remote_lag == None)):
+							if ((link.local_lag != 'UNKNOWN') and (ex_link.remote_lag == None)):
 								ex_link.remote_lag = link.local_lag
 
-							if ((len(link.local_lag_ips) == 0) & len(ex_link.remote_lag_ips)):
+							if ((len(link.local_lag_ips) == 0) and len(ex_link.remote_lag_ips)):
 								ex_link.remote_lag_ips = link.local_lag_ips
 
-							if ((link.local_native_vlan != None) & (ex_link.remote_native_vlan == None)):
+							if ((link.local_native_vlan != None) and (ex_link.remote_native_vlan == None)):
 								ex_link.remote_native_vlan = link.local_native_vlan
 
-							if ((link.local_allowed_vlans != None) & (ex_link.remote_allowed_vlans == None)):
+							if ((link.local_allowed_vlans != None) and (ex_link.remote_allowed_vlans == None)):
 								ex_link.remote_allowed_vlans = link.local_allowed_vlans
 
 							return 0
 		else:
 			for ex_link in node.links:
-				if ((ex_link.node.name == link.node.name) & (ex_link.local_port == link.local_port)):
+				if ((ex_link.node.name == link.node.name) and (ex_link.local_port == link.local_port)):
 					# haven't crawled yet but somehow we have this link twice.
 					# maybe from different discovery processes?
 					return 0
@@ -341,7 +347,7 @@ class mnet_graph:
 		print('  Platform: %s' % node.plat)
 		print('   IOS Ver: %s' % node.ios)
 
-		if ((node.vss.enabled == 0) & (node.stack.count == 0)):
+		if ((node.vss.enabled == 0) and (node.stack.count == 0)):
 			print('    Serial: %s' % node.serial)
 
 		print('   Routing: %s' % ('yes' if (node.router == 1) else 'no'))
@@ -364,7 +370,7 @@ class mnet_graph:
 
 		print(' Stack Cnt: %i' % node.stack.count)
 		
-		if ((node.stack.count > 0) & (self.config.graph.get_stack_members)):
+		if ((node.stack.count > 0) and (self.config.graph.get_stack_members)):
 			print('      Stack members:')
 			for smem in node.stack.members:
 				print('        Switch Number: %s' % (smem.num))
@@ -394,7 +400,7 @@ class mnet_graph:
 		print('     Links:')
 		for link in node.links:
 			lag = ''
-			if ((link.local_lag != None) | (link.remote_lag != None)):
+			if ((link.local_lag != None) or (link.remote_lag != None)):
 				lag = 'LAG[%s:%s]' % (link.local_lag or '', link.remote_lag or '')
 			print('       %s -> %s:%s %s' % (link.local_port, link.node.name, link.remote_port, lag))
 			ret_links += 1
@@ -415,6 +421,13 @@ class mnet_graph:
 		print('-----')
 		num_nodes, num_links = self._output_stdout(self.root_node)
 
+		# we may have missed node
+		for n in self.nodes:
+		    if not n.crawled:
+		        n_nodes, n_links = self._output_stdout(n)
+		        num_nodes += n_nodes
+                        num_links += n_links
+
 		print('Discovered devices: %i' % num_nodes)
 		print('Discovered links:   %i' % num_links)
 
@@ -432,11 +445,11 @@ class mnet_graph:
 		if (node.ip[0] != ''):
 			dot_node.label += '<br /><font point-size="8"><i>%s</i></font>' % node.ip[0]
 
-		if ((node.stack.count == 0) | (self.config.graph.get_stack_members == 0)):
+		if ((node.stack.count == 0) or (self.config.graph.get_stack_members == 0)):
 			# show platform here or break it down by stack/vss later
 			dot_node.label += '<br />%s' % node.plat
 
-		if ((self.config.graph.include_serials == 1) & (node.stack.count == 0) & (node.vss.enabled == 0)):
+		if ((self.config.graph.include_serials == 1) and (node.stack.count == 0) and (node.vss.enabled == 0)):
 			dot_node.label += '<br />%s' % node.serial
 
 		dot_node.label += '<br />%s' % node.ios
@@ -533,7 +546,7 @@ class mnet_graph:
 
 				cluster.add_node(
 						pydot.Node(
-							name = '%s[mnetVSS%i]' % (node.name, i+1),
+							name = '%s[VSS%i]' % (node.name, i+1),
 							label = '<%s<br />%s>' % (dot_node.label, vss_label),
 							style = dot_node.style,
 							shape = dot_node.shape,
@@ -560,7 +573,7 @@ class mnet_graph:
 
 				cluster.add_node(
 						pydot.Node(
-							name = '%s[mnetSW%i]' % (node.name, i+1),
+							name = '%s[SW%i]' % (node.name, i+1),
 							label = '<%s<br />%s>' % (dot_node.label, sw_label),
 							style = dot_node.style,
 							shape = dot_node.shape,
@@ -573,7 +586,7 @@ class mnet_graph:
 		for link in node.links:
 			self._output_dot(graph, link.node)
 
-			if ((self.config.graph.expand_lag == 1) | (link.local_lag == 'UNKNOWN')):
+			if ((self.config.graph.expand_lag == 1) or (link.local_lag == 'UNKNOWN')):
 				self._output_dot_link(graph, node, link, 0)
 			else:
 				found = 0
@@ -614,16 +627,16 @@ class mnet_graph:
 
 				link_label += '\nLAG Member'
 
-				if ((local_lag_ip == '') & (remote_lag_ip == '')):
+				if ((local_lag_ip == '') and (remote_lag_ip == '')):
 					link_label += '\nP:%s | C:%s' % (link.local_lag, link.remote_lag)
 				else:
 					link_label += '\nP:%s%s' % (link.local_lag, local_lag_ip)
 					link_label += '\nC:%s%s' % (link.remote_lag, remote_lag_ip)
 
 			# IP Addresses
-			if ((link.local_if_ip != 'UNKNOWN') & (link.local_if_ip != None)):
+			if ((link.local_if_ip != 'UNKNOWN') and (link.local_if_ip != None)):
 				link_label += '\nP:%s' % link.local_if_ip
-			if ((link.remote_if_ip != 'UNKNOWN') & (link.remote_if_ip != None)):
+			if ((link.remote_if_ip != 'UNKNOWN') and (link.remote_if_ip != None)):
 				link_label += '\nC:%s' % link.remote_if_ip
 		else:
 			# LAG as grouping
@@ -639,7 +652,7 @@ class mnet_graph:
 			if (len(link.remote_lag_ips)):
 				remote_lag_ip = ' - %s' % link.remote_lag_ips[0]
 
-			if ((local_lag_ip == '') & (remote_lag_ip == '')):
+			if ((local_lag_ip == '') and (remote_lag_ip == '')):
 				link_label += '\nP:%s | C:%s' % (link.local_lag, link.remote_lag)
 			else:
 				link_label += '\nP:%s%s' % (link.local_lag, local_lag_ip)
@@ -651,7 +664,7 @@ class mnet_graph:
 			link_color = 'blue'
 			link_style = 'bold'
 
-			if ((link.local_native_vlan == link.remote_native_vlan) | (link.remote_native_vlan == None)):
+			if ((link.local_native_vlan == link.remote_native_vlan) or (link.remote_native_vlan == None)):
 				link_label += '\nNative %s' % link.local_native_vlan
 			else:
 				link_label += '\nNative P:%s C:%s' % (link.local_native_vlan, link.remote_native_vlan)
@@ -678,15 +691,15 @@ class mnet_graph:
 
 		if (self.config.graph.expand_vss == 1):
 			if (node.vss.enabled == 1):
-				edge_src = '%s[mnetVSS%s]' % (node.name, lmod)
+				edge_src = '%s[VSS%s]' % (node.name, lmod)
 			if (link.node.vss.enabled == 1):
-				edge_dst = '%s[mnetVSS%s]' % (link.node.name, rmod)
+				edge_dst = '%s[VSS%s]' % (link.node.name, rmod)
 
 		if (self.config.graph.expand_stackwise == 1):
 			if (node.stack.count > 0):
-				edge_src = '%s[mnetSW%s]' % (node.name, lmod)
+				edge_src = '%s[SW%s]' % (node.name, lmod)
 			if (link.node.stack.count > 0):
-				edge_dst = '%s[mnetSW%s]' % (link.node.name, rmod)
+				edge_dst = '%s[SW%s]' % (link.node.name, rmod)
 
 		edge = pydot.Edge(
 					edge_src, edge_dst,
@@ -743,6 +756,11 @@ class mnet_graph:
 		# add all of the nodes and links
 		self._output_dot(graph, self.root_node)
 
+		# we may have missed node
+		for n in self.nodes:
+		    if not n.crawled:
+		        self._output_dot(graph, n)
+
 		# get file extension
 		file_name, file_ext = os.path.splitext(dot_file)
 
@@ -786,4 +804,625 @@ class mnet_graph:
 				f.write('"%s","%s","%s","%s","%s","","%s"\n' % (n.name, n.ip[0], n.plat, n.ios, n.serial, n.bootfile))
 
 		f.close()
+
+#----
+	def _output_graphml_get_node(self, graph, node):
+		dot_node = mnet_graph_dot_node()
+		dot_node.ntype = 'single'
+		dot_node.shape = 'ellipse'
+		dot_node.style = 'solid'
+		dot_node.peripheries = 1
+
+		dot_node.name = '%s' % node.name
+		dot_node.label = '%s' % node.name
+
+		if (node.ip[0] != ''):
+			dot_node.label += '\n%s' % node.ip[0]
+
+		if ((node.stack.count == 0) or (self.config.graph.get_stack_members == 0)):
+			# show platform here or break it down by stack/vss later
+			dot_node.label += '\n%s' % node.plat
+
+		if ((self.config.graph.include_serials == 1) and (node.stack.count == 0) and (node.vss.enabled == 0)):
+			dot_node.label += '\n%s' % node.serial
+
+		dot_node.label += '\n%s' % node.ios
+
+		if (node.vss.enabled == 1):
+			if (self.config.graph.expand_vss == 1):
+				dot_node.ntype = 'vss'
+			else:
+				# group VSS into one graph node
+				dot_node.peripheries = 2
+				s1 = ''
+				s2 = ''
+				if (self.config.graph.include_serials == 1):
+					s1 = ' - %s' % node.vss.members[0].serial
+					s2 = ' - %s' % node.vss.members[1].serial
+
+				dot_node.label += '\nVSS %s' % node.vss.domain
+				dot_node.label += '\nVSS 0 - %s%s' % (node.vss.members[0].plat, s1)
+				dot_node.label += '\nVSS 1 - %s%s' % (node.vss.members[1].plat, s2)
+
+		if (node.stack.count > 0):
+			if (self.config.graph.expand_stackwise == 1):
+				dot_node.ntype = 'stackwise'
+			else:
+				# group Stackwise into one graph node
+				dot_node.peripheries = node.stack.count
+
+				dot_node.label += '\nStackwise %i' % node.stack.count
+
+				if (self.config.graph.get_stack_members):
+					for smem in node.stack.members:
+						serial = ''
+						if (self.config.graph.include_serials == 1):
+							serial = ' - %s' % smem.serial
+						dot_node.label += '\nSW %s - %s%s (%s)' % (smem.num, smem.plat, serial, smem.role)
+
+		if (node.router == 1):
+			dot_node.shape = 'diamond'
+			if (node.bgp_las != None):
+				dot_node.label += '\nBGP %s' % node.bgp_las
+			if (node.ospf_id != None):
+				dot_node.label += '\nOSPF %s' % node.ospf_id
+			if (node.hsrp_pri != None):
+				dot_node.label += '\nHSRP VIP %s' \
+								'\nHSRP Pri %s' % (node.hsrp_vip, node.hsrp_pri)
+
+		if (self.config.graph.include_lo == True):
+			for lo in node.loopbacks:
+				for lo_ip in lo.ips:
+					dot_node.label += '\n%s - %s' % (lo.name, lo_ip)
+
+		if (self.config.graph.include_svi == True):
+			for svi in node.svis:
+				for ip in svi.ip:
+					dot_node.label += '\nVLAN %s - %s' % (svi.vlan, ip)
+
+		return dot_node
+
+
+	def _output_graphml_get_node_description(self, node):
+		if (node == None):
+			return None
+
+                descr =  ''
+		descr += '-----------------------------------------\n'
+		descr += '      Name: %s\n' % node.name
+                for ip in node.ip:
+		    descr += '        IP: %s\n' % ip
+		descr += '  Platform: %s\n' % node.plat
+		descr += '   IOS Ver: %s\n' % node.ios
+
+		if ((node.vss.enabled == 0) and (node.stack.count == 0)):
+                        descr +=  '    Serial: %s\n' % node.serial
+
+		descr += '   Routing: %s\n' % ('yes' if (node.router == 1) else 'no')
+		descr += '   OSPF ID: %s\n' % node.ospf_id
+		descr += '   BGP LAS: %s\n' % node.bgp_las
+		descr += '  HSRP Pri: %s\n' % node.hsrp_pri
+		descr += '  HSRP VIP: %s\n' % node.hsrp_vip
+
+		if (node.vss.enabled):
+			descr += '  VSS Mode: %i\n' % node.vss.enabled
+			descr += 'VSS Domain: %s\n' % node.vss.domain
+			descr += '       VSS Slot 0:\n'
+			descr += '              IOS: %s\n' % node.vss.members[0].ios
+			descr += '           Serial: %s\n' % node.vss.members[0].serial
+			descr += '         Platform: %s\n' % node.vss.members[0].plat
+			descr += '       VSS Slot 1:\n'
+			descr += '              IOS: %s\n' % node.vss.members[1].ios
+			descr += '           Serial: %s\n' % node.vss.members[1].serial
+			descr += '         Platform: %s\n' % node.vss.members[1].plat
+
+		descr += ' Stack Cnt: %i\n' % node.stack.count
+
+		if ((node.stack.count > 0) and (self.config.graph.get_stack_members)):
+			descr += '      Stack members\n:'
+			for smem in node.stack.members:
+				descr += '        Switch Number: %s\n' % (smem.num)
+				descr += '                 Role: %s\n' % (smem.role)
+				descr += '             Priority: %s\n' % (smem.pri)
+				descr += '                  MAC: %s\n' % (smem.mac)
+				descr += '             Platform: %s\n' % (smem.plat)
+				descr += '                Image: %s\n' % (smem.img)
+				descr += '               Serial: %s\n' % (smem.serial)
+
+		descr += '      Loopbacks:'
+		if (self.config.graph.include_lo == False):
+			descr += '        Not configured.\n'
+		else:
+			for lo in node.loopbacks:
+				for lo_ip in lo.ips:
+					descr += '        %s - %s\n' % (lo.name, lo_ip)
+
+		descr += '      SVIs:\n'
+		if (self.config.graph.include_svi == False):
+			descr += '        Not configured.\n'
+		else:
+			for svi in node.svis:
+				for ip in svi.ip:
+					descr += '        SVI %s - %s\n' % (svi.vlan, ip)
+
+		descr += '     Links:\n'
+		for link in node.links:
+			lag = ''
+			if ((link.local_lag != None) or (link.remote_lag != None)):
+				lag = 'LAG[%s:%s]' % (link.local_lag or '', link.remote_lag or '')
+			descr += '       %s -> %s:%s %s\n' % (link.local_port, link.node.name, link.remote_port, lag)
+
+		return descr
+
+
+        def _output_graphml(self, doc, graphml, G, root, graph, node, options=None, subgraph=False):
+	    if (node == None):
+		    return (0, 0)
+	    if (node.crawled > 0):
+		    return (0, 0)
+	    node.crawled = 1
+
+            if not options:
+                options = Options()
+	    dot_node = self._output_graphml_get_node(graph, node)
+
+	    if not root:
+		root = Graph().exportGraphml(doc, graphml, options)
+		#root.setAttribute(u'parse.edges',u'%d' % len(G['edges']))
+		#root.setAttribute(u'parse.nodes',u'%d' % len(G['nodes']))
+		#root.setAttribute(u'parse.order', u'free')
+
+	    if (dot_node.ntype == 'single'):
+		n = Node(dot_node.label)
+                G['nodes'][dot_node.name] = n
+		n.attribs['description'] = self._output_graphml_get_node_description(node)
+		n.attribs['modelName'] = 'sandwich'
+		n.attribs['modelPosition'] = 's'
+		n.attribs['shapeType'] = dot_node.shape
+		n.exportGraphml(doc, root, options)
+                G['dot'].append('%s;' % n.id)
+		graph.add_node(
+		    pydot.Node(
+			name = n.id,
+			label = '<%s>' % dot_node.label,
+			style = dot_node.style,
+			shape = dot_node.shape,
+			peripheries = dot_node.peripheries
+		    )
+		)
+	    elif (dot_node.ntype == 'vss'):
+		label = 'VSS %s' % node.vss.domain
+		folder = Folder(label)
+		sub = Graph(folder.id).exportGraphml(doc, graphml, options)
+		#sub.setAttribute(u'parse.edges',u'%d' % len(graph['edges']))
+		sub.setAttribute(u'parse.nodes',u'%d' % 2)
+		sub.setAttribute(u'parse.order', u'free')
+
+		dom = folder.exportGraphml(doc, graphml, options)
+		root.appendChild(dom)
+		dom.appendChild(sub)
+
+                G['dot'].append('subgraph %s {' % node.name)
+                G['dot'].append('graph [nodesep=1.0, ranksep=1.0, mindist=1.0];')
+		cluster = pydot.Cluster(
+			graph_name = node.name,
+			suppress_disconnected = False,
+			labelloc = 't',
+			labeljust = 'c',
+			fontsize = self.config.graph.node_text_size,
+			label = '<<br /><b>VSS %s</b>>' % node.vss.domain
+			)
+                members = []
+		for i in range(0, 2):
+		    serial = ''
+		    if (self.config.graph.include_serials == 1):
+			serial = ' - %s' % node.vss.members[i].serial
+
+		    vss_label = 'VSS %i - %s%s' % (i, node.vss.members[i].plat, serial)
+
+		    n = Node('%s[VSS%i]' % (node.name, i+1))
+                    G['nodes'][n.label] = n
+		    n.attribs['modelName'] = 'sandwich'
+		    n.attribs['modelPosition'] = 's'
+		    n.attribs['shapeType'] = dot_node.shape
+		    n.exportGraphml(doc, sub, options)
+                    members.append(n)
+                    G['dot'].append('%s;' % n.id)
+		    cluster.add_node(
+			pydot.Node(
+			    name = n.id,
+			    label = '%s\n%s' % (dot_node.label, vss_label),
+			    style = dot_node.style,
+			    shape = dot_node.shape,
+			    peripheries = dot_node.peripheries
+			)
+		    )
+		for i in range(0, 2):
+		    e = Edge()
+		    e.src = members[i]
+		    e.dest = members[(i + 1) % 2]
+		    e.exportGraphml(doc, sub, G['nodes'], options)
+                G['dot'].append('{ rank = same; %s }' % ' '.join(map(lambda x: x.id, members)))
+                G['dot'].append('}')
+		graph.add_subgraph(cluster)
+	    elif (dot_node.ntype == 'stackwise'):
+		label = 'Stackwise'
+		folder = Folder(label)
+		sub = Graph(folder.id).exportGraphml(doc, graphml, options)
+		#sub.setAttribute(u'parse.edges',u'%d' % len(graph['edges']))
+		sub.setAttribute(u'parse.nodes',u'%d' % 2)
+		sub.setAttribute(u'parse.order', u'free')
+
+		dom = folder.exportGraphml(doc, graphml, options)
+		root.appendChild(dom)
+		dom.appendChild(sub)
+
+                G['dot'].append('subgraph %s {' % node.name)
+                G['dot'].append('graph [nodesep=1.0, ranksep=1.0, mindist=1.0];')
+		cluster = pydot.Cluster(
+			graph_name = node.name,
+			suppress_disconnected = False,
+			labelloc = 't',
+			labeljust = 'c',
+			fontsize = self.config.graph.node_text_size,
+			label = '<<br /><b>Stackwise</b>>'
+			)
+                members = []
+		for i in range(0, node.stack.count):
+		    serial = ''
+		    if (self.config.graph.include_serials == 1):
+			serial = ' - %s' % node.stack.members[i].serial
+
+		    smem = node.stack.members[i]
+		    sw_label = 'SW %i (%s)<br />%s%s' % (i, smem.role, smem.plat, serial)
+
+		    n = Node('%s[SW%i]' % (node.name, i+1))
+                    G['nodes'][n.label] = n
+		    n.attribs['modelName'] = 'sandwich'
+		    n.attribs['modelPosition'] = 's'
+		    #n.attribs['shapeType'] = dot_node.shape
+		    n.exportGraphml(doc, sub, options)
+                    G['dot'].append('%s;' % n.id)
+                    members.append(n)
+		    cluster.add_node(
+			pydot.Node(
+			    name = n.id,
+			    label = '%s\n%s' % (dot_node.label, sw_label),
+			    style = dot_node.style,
+			    shape = dot_node.shape,
+			    peripheries = dot_node.peripheries
+			    )
+			)
+
+		for i in range(0, node.stack.count):
+		    e = Edge()
+		    e.src = members[i]
+		    e.dest = members[(i + 1) % node.stack.count]
+		    e.exportGraphml(doc, sub, G['nodes'], options)
+
+                G['dot'].append('{ rank = same; %s }' % ' '.join(map(lambda x: x.id, members)))
+                G['dot'].append('}')
+		graph.add_subgraph(cluster)
+
+	    lags = []
+	    for link in node.links:
+		self._output_graphml(doc, graphml, G, root, graph, link.node, options)
+
+		if ((self.config.graph.expand_lag == 1) or (link.local_lag == 'UNKNOWN')):
+		    self._output_graphml_link(doc, graphml, G, root, graph, node, link, 0)
+		else:
+		    found = 0
+		    for lag in lags:
+			if (link.local_lag == lag):
+			    found = 1
+			    break
+		    if (found == 0):
+			lags.append(link.local_lag)
+			self._output_graphml_link(doc, graphml, G, root, graph, node, link, 1)
+
+
+	def _output_graphml_link(self, doc, graphml, G, root, graph, node, link, draw_as_lag, options=None):
+	    link_color = 'black'
+	    link_style = 'solid'
+
+            if not options:
+                options = Options()
+	    if (draw_as_lag):
+		link_label = 'LAG'
+		members = 0
+		for l in node.links:
+		    if (l.local_lag == link.local_lag):
+			members += 1
+		link_label += '\n%i Members' % members
+	    else:
+		link_label = 'P:%s\nC:%s' % (link.local_port, link.remote_port)
+
+	    is_lag = 1 if (link.local_lag != 'UNKNOWN') else 0
+
+	    if (draw_as_lag == 0):
+		# LAG as member
+		if (is_lag):
+		    local_lag_ip = ''
+		    remote_lag_ip = ''
+		    if (len(link.local_lag_ips)):
+			    local_lag_ip = ' - %s' % link.local_lag_ips[0]
+		    if (len(link.remote_lag_ips)):
+			    remote_lag_ip = ' - %s' % link.remote_lag_ips[0]
+
+		    link_label += '\nLAG Member'
+
+		    if ((local_lag_ip == '') and (remote_lag_ip == '')):
+			link_label += '\nP:%s | C:%s' % (link.local_lag, link.remote_lag)
+		    else:
+			link_label += '\nP:%s%s' % (link.local_lag, local_lag_ip)
+			link_label += '\nC:%s%s' % (link.remote_lag, remote_lag_ip)
+
+		# IP Addresses
+		if ((link.local_if_ip != 'UNKNOWN') and (link.local_if_ip != None)):
+		    link_label += '\nP:%s' % link.local_if_ip
+		if ((link.remote_if_ip != 'UNKNOWN') and (link.remote_if_ip != None)):
+		    link_label += '\nC:%s' % link.remote_if_ip
+	    else:
+		# LAG as grouping
+		for l in node.links:
+		    if (l.local_lag == link.local_lag):
+			link_label += '\nP:%s | C:%s' % (l.local_port, l.remote_port)
+
+		local_lag_ip = ''
+		remote_lag_ip = ''
+
+		if (len(link.local_lag_ips)):
+		    local_lag_ip = ' - %s' % link.local_lag_ips[0]
+		if (len(link.remote_lag_ips)):
+		    remote_lag_ip = ' - %s' % link.remote_lag_ips[0]
+
+		if ((local_lag_ip == '') and (remote_lag_ip == '')):
+		    link_label += '\nP:%s | C:%s' % (link.local_lag, link.remote_lag)
+		else:
+		    link_label += '\nP:%s%s' % (link.local_lag, local_lag_ip)
+		    link_label += '\nC:%s%s' % (link.remote_lag, remote_lag_ip)
+
+	    if (link.link_type == '1'):
+		# Trunk = Bold/Blue
+		link_color = 'blue'
+		link_style = 'bold'
+
+		if ((link.local_native_vlan == link.remote_native_vlan) or (link.remote_native_vlan == None)):
+		    link_label += '\nNative %s' % link.local_native_vlan
+		else:
+		    link_label += '\nNative P:%s C:%s' % (link.local_native_vlan, link.remote_native_vlan)
+
+		if (link.local_allowed_vlans == link.remote_allowed_vlans):
+		    link_label += '\nAllowed %s' % link.local_allowed_vlans
+		else:
+		    link_label += '\nAllowed P:%s' % link.local_allowed_vlans
+		    if (link.remote_allowed_vlans != None):
+			link_label += '\nAllowed C:%s' % link.remote_allowed_vlans
+	    elif (link.link_type is None):
+		# Routed = Bold/Red
+		link_color = 'red'
+		link_style = 'bold'
+	    else:
+		# Switched access, include VLAN ID in label
+		if (link.vlan != None):
+		    link_label += '\nVLAN %s' % link.vlan
+
+	    edge_src = node.name
+	    edge_dst = link.node.name
+	    lmod = get_module_from_interf(link.local_port)
+	    rmod = get_module_from_interf(link.remote_port)
+
+	    if (self.config.graph.expand_vss == 1):
+		if (node.vss.enabled == 1):
+		    edge_src = '%s[VSS%s]' % (node.name, lmod)
+		if (link.node.vss.enabled == 1):
+		    edge_dst = '%s[VSS%s]' % (link.node.name, rmod)
+
+	    if (self.config.graph.expand_stackwise == 1):
+		    if (node.stack.count > 0):
+			edge_src = '%s[SW%s]' % (node.name, lmod)
+		    if (link.node.stack.count > 0):
+			edge_dst = '%s[SW%s]' % (link.node.name, rmod)
+
+	    e = Edge()
+            e.label = link_label
+            G['edges'][e.label] = e
+	    e.src = Node.find(edge_src)
+            if not e.src:
+	        e.src = G['nodes'][edge_src]
+	    e.dest = Node.find(edge_dst)
+            if not e.dest:
+	        e.dest = G['nodes'][edge_dst]
+	    e.attribs['color'] = link_color
+	    if G.has_key('default_edge') and G['default_edge']:
+		e.complementAttributes(G['default_edge'])
+	    e.exportGraphml(doc, root, G['nodes'], options)
+
+            G['dot'].append('%s -- %s;' % (e.src.id, e.dest.id))
+	    edge = pydot.Edge(
+				e.src.id, e.dest.id,
+				dir = 'forward',
+				label = link_label,
+				color = link_color,
+				style = link_style
+			    )
+
+	    graph.add_edge(edge)
+
+
+	def output_graphml(self, graphml_file, title, options):
+		self._reset_crawled()
+
+		title_text_size = self.config.graph.title_text_size
+		credits = '$title$\n$date$\nGenerated by MNet Suite $ver$\nWritten by Michael Laforest\n'
+		today = datetime.datetime.now()
+		today = today.strftime('%Y-%m-%d %H:%M')
+		credits = credits.replace('$ver$', __version__)
+		credits = credits.replace('$date$', today)
+		credits = credits.replace('$title$', title)
+
+		node_text_size = self.config.graph.node_text_size
+		link_text_size = self.config.graph.link_text_size
+
+                G = {'name': title, 'nodes': {}, 'edges': {}, 'subgraphs': [], 'default_edge': None, 'default_node': None }
+
+                G['dot'] = []
+                G['dot'].append('graph {')
+
+		graph = pydot.Dot(
+				graph_type = 'graph',
+				labelloc = 'b',
+				labeljust = 'r',
+				fontsize = node_text_size,
+				label = '<%s>' % credits
+		)
+		graph.set_node_defaults(
+				fontsize = link_text_size
+		)
+		graph.set_edge_defaults(
+				fontsize = link_text_size,
+				labeljust = 'l'
+		)
+
+                doc = xml.dom.minidom.Document()
+
+		graphml = doc.createElement(u'graphml')
+		graphml.setAttribute(u'xmlns',u'http://graphml.graphdrawing.org/xmlns')
+		graphml.setAttribute(u'xmlns:xsi',u'http://www.w3.org/2001/XMLSchema-instance')
+		graphml.setAttribute(u'xmlns:y',u'http://www.yworks.com/xml/graphml')
+		graphml.setAttribute(u'xsi:schemaLocation',u'http://graphml.graphdrawing.org/xmlns/graphml http://www.yworks.com/xml/schema/graphml/1.0/ygraphml.xsd')
+		doc.appendChild(graphml)
+                root = None
+
+		for keydata in Data_id:
+		    key = doc.createElement(u'key')
+		    for k, v in keydata.iteritems():
+			key.setAttribute(k, v)
+		    graphml.appendChild(key)
+
+		data = doc.createElement(u'data')
+		data.setAttribute(u'key', GraphML.data_id[u'resources'])
+		res = doc.createElement(u'y:Resources')
+		data.appendChild(res)
+		graphml.appendChild(data)
+
+
+		# add all of the nodes and links
+		self._output_graphml(doc, graphml, G, root, graph, self.root_node, options)
+		# we may have missed node
+		for n in self.nodes:
+		    if not n.crawled:
+			self._output_graphml(doc, graphml, G, root, graph, n, options)
+
+		G['dot'].append('}')
+		self.layout(doc, G, options.LayoutStyle)
+
+		# Output
+		o = open(graphml_file, 'w')
+		o.write(doc.toprettyxml(indent="  ", encoding="utf-8"))
+		o.close()
+
+		print('Created graph: %s' % graphml_file)
+
+
+	def layout(self, doc, graph, layoutstyle):
+	    import networkx as nx
+
+	    def create_from_graphml(doc):
+		from networkx.readwrite.graphml import GraphMLReader
+                from tempfile import TemporaryFile
+
+                f = TemporaryFile(mode='r+')
+                f.write(doc.toxml(encoding="utf-8"))
+                f.seek(0)
+		reader = GraphMLReader()
+		#glist=list(reader(string=doc.toxml(encoding="utf-8")))
+		glist=list(reader(f))
+
+		G = nx.Graph()
+		for subg in glist:
+		    for n in subg.nodes():
+			if subg.node[n].has_key('label'):
+			    subg.node[n]['label'] = '"%s"' % subg.node[n]['label']
+			for k in subg.node[n].keys():
+			    if not k in ['y', 'x', 'label']:
+				del(subg.node[n][k])
+		    G.add_nodes_from(subg.nodes(data=True))
+		    G.add_edges_from(subg.edges(data=True))
+
+		# set graph_defaults
+		G.graph['graph'] = { 'nodesep': '4.0', 'ranksep': '4.0' }
+
+		return G
+
+	    def from_pydot(graph):
+		import pydot
+
+		P = pydot.graph_from_dot_data('\n'.join(graph['dot']))
+		g_with_pos = pydot.graph_from_dot_data(P.create_dot())
+		pos = {}
+		for n in g_with_pos.get_nodes():
+		    p = n.get_pos()
+		    if p:
+			x, y = p.strip('"').split(",")
+			x, y = float(x), float(y)
+			pos[n.get_name()] = (x, y)
+		for s in g_with_pos.get_subgraph_list():
+		    for n in s.get_nodes():
+			p = n.get_pos()
+			if p:
+			    x, y = p.strip('"').split(",")
+			    x, y = float(x), float(y)
+			    pos[n.get_name()] = (x, y)
+		return pos
+
+	    def from_pygraphviz(graph):
+		import pygraphviz
+
+		A = pygraphviz.AGraph(string='\n'.join(graph['dot']))
+		G = nx.from_agraph(A)
+
+		A.layout(prog=layoutstyle)
+		pos = {}
+		for n in G:
+		    node = pygraphviz.Node(A, n)
+		    try:
+			xx,yy = node.attr["pos"].split(',')
+			pos[n] = (float(xx), float(yy))
+		    except:
+			pass
+		return pos
+
+	    if layoutstyle in ['dot', 'neato', 'fdp', 'sfdp', 'twopi', 'circo']:
+		graph['dot'].insert(1, 'graph [nodesep=4.0, ranksep=4.0, mindist=4.0];')
+		try:
+		    pos = from_pydot(graph)
+		except:
+		    try:
+			pos = from_pygraphviz(graph)
+		    except:
+			G = create_from_graphml(doc)
+			pos = nx.graphviz_layout(G, prog=layoutstyle)
+	    else:
+		G = create_from_graphml(doc)
+		if layoutstyle == 'spring':
+		    pos = nx.spring_layout(G, scale=500.0)
+		elif layoutstyle == 'circular':
+		    pos = nx.circular_layout(G, scale=500.0)
+		elif layoutstyle == 'random':
+		    pos = nx.random_layout(g)
+		    for id, xy in pos.iteritems():
+			pos[id][0] *= 500.0
+			pos[id][1] *= 500.0
+		elif layoutstyle == 'shell':
+		    pos = nx.shell_layout(G, scale=500.0)
+		elif layoutstyle == 'spectral':
+		    pos = nx.spectral_layout(G, scale=500.0)
+
+	    for n in doc.getElementsByTagName('node'):
+		id = n.getAttribute('id')
+		if pos.has_key(id):
+		    for geom in n.getElementsByTagName('y:Geometry'):
+			geom.setAttribute('x', '%s' % pos[id][0])
+			geom.setAttribute('y', '%s' % pos[id][1])
 

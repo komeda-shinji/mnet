@@ -26,15 +26,33 @@
 
 import sys
 import getopt
+import optparse
 import datetime
 import os
 
 import mnetsuite
 
+usgmsg = """
+Usage:
+	mnet.py graph -r <root IP>
+	              -f <file> | -g <file>
+	              [-d <max depth>]
+	              [-c <config file>]
+	              [-t <diagram title>]
+	              [-C <catalog file>]
+
+	mnet.py tracemac -r <root IP>
+	                 -m <MAC Address>
+	                 [-c <config file>]
+
+	mnet.py config
+"""
+
 def print_syntax():
 	print('Usage:\n'
 			'  mnet.py graph -r <root IP>\n'
-			'                -f <file>\n'
+			'                -f <file> (in graphvis)\n'
+			'                -g <file> (in GraphML)\n'
 			'                [-d <max depth>]\n'
 			'                [-c <config file>]\n'
 			'                [-t <diagram title>]\n'
@@ -55,7 +73,6 @@ def print_banner():
 
 
 def main(argv):
-	opt_root_ip = None
 	if (len(argv) < 1):
 		print_banner()
 		print_syntax()
@@ -76,44 +93,111 @@ def main(argv):
 
 
 def graph(argv):
+	opt_root_ip = []
 	max_depth = 0
 
 	graph = mnetsuite.mnet_graph()
 
 	opt_dot = None
+	opt_graphml = None
 	opt_depth = 0
 	opt_title = 'MNet Network Diagram'
 	opt_conf = './mnet.conf'
 	opt_catalog = None
 
+        parser = optparse.OptionParser(usage=usgmsg)
+	parser.add_option('-r', '--root',
+                      action='append', dest='root_ip')
+	parser.add_option('-f',
+                      action='store', dest='dot')
+	parser.add_option('-g',
+                      action='store', dest='graphml')
+	parser.add_option('-d',
+                      action='store', dest='depth', type='int', default=0)
+	parser.add_option('-t',
+                      action='store', dest='title', default=opt_title)
+	parser.add_option('-c',
+                      action='store', dest='conf')
+	parser.add_option('-C',
+                      action='store', dest='catalog')
+
+        parser.add_option('--layout',
+                      action='store', dest='LayoutStyle', default='dot',
+                      help='layout style for GraphML output '
+                           '(dot|spring|circular|random|shell|spectral) '
+                           '[default : dot]'
+                           )
+
+        parser.add_option('--na', '--no-arrows',
+                      action='store_false', dest='Arrows', default=True,
+                      help='do not output any arrows [Graphml]')
+        parser.add_option('--nc', '--no-colors',
+                      action='store_false', dest='Colors', default=True,
+                      help='do not output any colors [Graphml]')
+        parser.add_option('--nn', '--no-nodes',
+                      action='store_false', dest='NodeLabels', default=True,
+                      help='do not output any node labels [Graphml]')
+        parser.add_option('--nu', '--no-uml',
+                      action='store_false', dest='NodeUml', default=True,
+                      help='do not output any node methods/attributes in UML [Graphml]')
+        parser.add_option('--la', '--lump-attributes',
+                      action='store_true', dest='LumpAttributes', default=False,
+                      help='lump class attributes/methods together with the node label [Graphml]')
+        parser.add_option('--sc', '--separator-char',
+                      action='store', dest='SepChar', default='_', metavar='SEPCHAR',
+                      help='default separator char when lumping attributes/methods [default : "_"]')
+        parser.add_option('--ne', '--no-edges',
+                      action='store_false', dest='EdgeLabels', default=True,
+                      help='do not output any edge labels [Graphml]')
+        parser.add_option('--ae', '--auto-edges',
+                      action='store_true', dest='EdgeLabelsAutoComplete', default=False,
+                      help='auto-complete edge labels')
+
+
+        parser.add_option('--cn', '--color-nodes',
+                      action='store', dest='DefaultNodeColor', default='#CCCCFF', metavar='COLOR',
+                      help='default node color [default : "#CCCCFF"]')
+        parser.add_option('--cnt', '--color-nodes-text',
+                      action='store', dest='DefaultNodeTextColor', default='#000000', metavar='COLOR',
+                      help='default node text color for labels [default : "#000000"]')
+        parser.add_option('--ce', '--color-edges',
+                      action='store', dest='DefaultEdgeColor', default='#000000', metavar='COLOR',
+                      help='default edge color [default : "#000000"]')
+        parser.add_option('--cet', '--color-edges-text',
+                      action='store', dest='DefaultEdgeTextColor', default='#000000', metavar='COLOR',
+                      help='default edge text color for labels [default : "#000000"]')
+        parser.add_option('--ah', '--arrowhead',
+                      action='store', dest='DefaultArrowHead', default='none', metavar='TYPE',
+                      help='sets the default appearance of arrow heads for edges (normal|diamond|dot|...) [default : %default]')
+        parser.add_option('--at', '--arrowtail',
+                      action='store', dest='DefaultArrowTail', default='none', metavar='TYPE',
+                      help='sets the default appearance of arrow tails for edges (normal|diamond|dot|...) [default : %default]')
+
+
 	try:
-		opts, args = getopt.getopt(argv, 'f:d:r:t:F:c:C:')
+		#opts, args = getopt.getopt(argv, 'f:g:d:r:t:F:c:C:')
+		options, args = parser.parse_args()
 	except getopt.GetoptError:
 		print_syntax()
 		sys.exit(1)
-	for opt, arg in opts:
-		if (opt == '-r'):
-			opt_root_ip = arg
-		if (opt == '-f'):
-			opt_dot = arg
-		if (opt == '-d'):
-			opt_depth = int(arg)
-			max_depth = int(arg)
-		if (opt == '-t'):
-			opt_title = arg
-		if (opt == '-c'):
-			opt_conf = arg
-		if (opt == '-C'):
-			opt_catalog = arg
+	opt_root_ip = options.root_ip
+	opt_dot = options.dot
+	opt_graphml = options.graphml
+	opt_depth = options.depth
+	max_depth = options.depth
+	opt_title = options.title
+	opt_conf = options.conf
+	opt_catalog = options.catalog
 
-	if ((opt_root_ip == None) | (opt_dot == None)):
+	if not (len(opt_root_ip) >= 0 and (opt_dot or opt_graphml)):
 		print_syntax()
 		print('Invalid arguments.')
 		return
 
 	print('     Config file: %s' % opt_conf)
-	print('       Root node: %s' % opt_root_ip)
-	print('     Output file: %s' % opt_dot)
+	print('       Root node: %s' % ', '.join(opt_root_ip))
+	if opt_dot: print('     Output file: %s' % opt_dot)
+	if opt_graphml: print('     Output file: %s' % opt_graphml)
 	print('     Crawl depth: %s' % opt_depth)
 	print('   Diagram title: %s' % opt_title)
 	print('Out Catalog file: %s' % opt_catalog)
@@ -134,6 +218,9 @@ def graph(argv):
 	if (opt_dot != None):
 		graph.output_dot(opt_dot, opt_title)
 
+	if (opt_graphml != None):
+		graph.output_graphml(opt_graphml, opt_title, options)
+
 	if (opt_catalog != None):
 		graph.output_catalog(opt_catalog)
 
@@ -141,7 +228,7 @@ def graph(argv):
 def tracemac(argv):
 	trace = mnetsuite.mnet_tracemac()
 
-	opt_root_ip = None
+	opt_root_ip = []
 	opt_conf = './mnet.conf'
 	opt_mac = None
 
@@ -152,19 +239,19 @@ def tracemac(argv):
 		return
 	for opt, arg in opts:
 		if (opt == '-r'):
-			opt_root_ip = arg
+			opt_root_ip.append(arg)
 		if (opt == '-c'):
 			opt_conf = arg
 		if (opt == '-m'):
 			opt_mac = arg
 
-	if ((opt_root_ip == None) | (opt_mac == None)):
+	if ((len(opt_root_ip) == 0) or (opt_mac == None)):
 		print_syntax()
 		print('Invalid arguments.')
 		return
 
 	print('     Config file: %s' % opt_conf)
-	print('       Root node: %s' % opt_root_ip)
+	print('       Root node: %s' % ', '.join(opt_root_ip))
 	print('     MAC address: %s' % opt_mac)
 
 	print('\n\n')
@@ -181,8 +268,8 @@ def tracemac(argv):
 	print('Start trace.')
 	print('------------')
 
-	ip = opt_root_ip
-	while (ip != None):
+	for ip in opt_root_ip:
+	    while (ip != None):
 		ip = trace.trace(ip, mac)
 		print('------------')
 

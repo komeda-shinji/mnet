@@ -143,7 +143,7 @@ class mnet_snmp:
 
 			cmdGen = cmdgen.CommandGenerator()
 			errIndication, errStatus, errIndex, varBinds = cmdGen.getCmd(
-					cmdgen.CommunityData(community),
+					cmdgen.CommunityData(community, mpModel=1),
 					cmdgen.UdpTransportTarget((self._ip, SNMP_PORT)),
 					'1.3.6.1.2.1.1.5.0',
 					lookupNames = False, lookupValues = True
@@ -165,7 +165,7 @@ class mnet_snmp:
 	def get_val(self, oid):
 		cmdGen = cmdgen.CommandGenerator()
 		errIndication, errStatus, errIndex, varBinds = cmdGen.getCmd(
-				cmdgen.CommunityData(self.v2_community),
+				cmdgen.CommunityData(self.v2_community, mpModel=1),
 				cmdgen.UdpTransportTarget((self._ip, SNMP_PORT), retries=2),
 				oid, lookupNames = False, lookupValues = True
 		)
@@ -174,7 +174,7 @@ class mnet_snmp:
 			print '[E] get_snmp_val(%s): %s' % (self.v2_community, errIndication)
 		else:
 			r = varBinds[0][1].prettyPrint()
-			if ((r == OID_ERR) | (r == OID_ERR_INST)):
+			if ((r == OID_ERR) or (r == OID_ERR_INST)):
 				return None
 			return r
 
@@ -189,7 +189,7 @@ class mnet_snmp:
 	def get_bulk(self, oid):
 		cmdGen = cmdgen.CommandGenerator()
 		errIndication, errStatus, errIndex, varBindTable = cmdGen.bulkCmd(
-				cmdgen.CommunityData(self.v2_community),
+				cmdgen.CommunityData(self.v2_community, mpModel=1),
 				cmdgen.UdpTransportTarget((self._ip, SNMP_PORT), timeout=30, retries=2),
 				0, 10,
 				oid,
@@ -202,7 +202,9 @@ class mnet_snmp:
 			ret = []
 			for r in varBindTable:
 				for n, v in r:
-					if (n.prettyPrint().startswith(oid) == 0):
+					#if (n.prettyPrint().startswith(oid) == 0):
+					#	return ret
+					if (str(n).startswith(oid) == 0):
 						return ret
 					ret.append(r)
 			return ret
@@ -217,6 +219,8 @@ class mnet_snmp:
 		for r in varBindTable:
 			for n, v in r:
 				if (n.prettyPrint() == name):
+					return v.prettyPrint()
+				if (str(n) == name):
 					return v.prettyPrint()
 		return None
 
